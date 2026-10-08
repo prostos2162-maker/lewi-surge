@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+data/
+out/
+*.bin
+*.npy
+*.safetensors
+kaggle/assets/*.json
+kaggle/assets/*.jinja
+kaggle/assets/*.yml
+!kaggle/assets/dataset-metadata.json

@@ -1,0 +1,17 @@
+{
+  "id": "steflett/moe-tok-fineweb-edu-b",
+  "title": "moe-tok-fineweb-edu-b",
+  "code_file": "tok.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": false,
+  "enable_internet": true,
+  "dataset_sources": [
+    "steflett/moe-assets"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [],
+  "model_sources": []
+}

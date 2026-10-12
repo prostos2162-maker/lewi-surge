@@ -1,0 +1,35 @@
+{
+  "id": "steflett/lewi-surge-stage2",
+  "title": "lewi-surge-stage2",
+  "code_file": "train.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": true,
+  "enable_internet": true,
+  "machine_shape": "TpuV5E8",
+  "docker_image": "gcr.io/kaggle-private-byod/python-tpuvm@sha256:bc3c1d3db8f7b8d2e9f9102d34b10155149dab7d10460c6a2ab8bcea92ef433f",
+  "dataset_sources": [
+    "steflett/moe-assets",
+    "steflett/lewi-surge-s2g-hf"
+  ],
+  "kernel_sources": [
+    "steflett/moe-tok-fineweb-edu-a",
+    "steflett/moe-tok-fineweb-edu-b",
+    "steflett/moe-tok-fineweb-edu-c",
+    "steflett/moe-tok-fineweb-edu-d",
+    "steflett/moe-tok2-uk",
+    "steflett/moe-tok2-espt",
+    "steflett/moe-tok2-frde",
+    "steflett/moe-tok2-math",
+    "steflett/moe-tok2-design",
+    "steflett/moe-tok2-code1",
+    "steflett/moe-tok2-code2",
+    "steflett/moe-tok3-anneal",
+    "steflett/moe-tok3-instruct",
+    "steflett/moe-tok3-cosmo"
+  ],
+  "competition_sources": [],
+  "model_sources": []
+}

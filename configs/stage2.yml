@@ -1,0 +1,105 @@
+# Стадія 2: та сама форма, що й стадія 1 (1.4B-A0.3B), продовження з ваг стадії 1 (оптимізатор з нуля).
+# Нове: суміш мов + код (~30%, з FIM) + математика + SVG/дизайн, Kaggle TPU v5e-8.
+# grain_train_files і steps підставляє kaggle/stage2/train.py (шляхи до виходів ноутбуків токенізації, бюджет годин).
+
+base_config: "base.yml"
+model_name: "default"
+override_model_config: True
+run_name: "stage2"
+
+decoder_block: "qwen3_5"
+
+# --- Ядро ---
+base_emb_dim: 1024
+base_num_decoder_layers: 12          # 3 повних attention + 9 GDN (цикл 4)
+base_num_query_heads: 8
+base_num_kv_heads: 2
+head_dim: 128
+vocab_size: 131200                   # 131072 BPE + 33 спец = 131105, вирівняно до 128
+logits_via_embedding: True           # tied embeddings: економимо ~101M на ранній стадії
+normalization_layer_epsilon: 1.0e-6
+
+# --- MoE (дрібні експерти + shared, як у Qwen3.5) ---
+base_mlp_dim: 512
+base_moe_mlp_dim: 512
+num_experts: 64                      # крупніші експерти → кращий MFU на GPU (див. docs/perf.md)
+shared_experts: 1
+num_experts_per_tok: 6
+norm_topk_prob: True
+# aux-loss-free (routed_bias) у MaxText 0.2.5 дозволено лише для decoder_block=deepseek.
+# TODO: пропатчити для qwen3_5. Поки — класичний aux loss, як у самого Qwen.
+routed_bias: False
+load_balance_loss_weight: 0.001
+megablox: True
+sparse_matmul: True
+capacity_factor: -1.0                # без викидання токенів
+
+# --- Gated DeltaNet (linear attention) ---
+inhomogeneous_layer_cycle_interval: 4
+gdn_conv_kernel_dim: 4
+gdn_key_head_dim: 128
+gdn_value_head_dim: 128
+gdn_num_key_heads: 4
+gdn_num_value_heads: 8
+gdn_chunk_size: 64
+
+# --- Позиції ---
+rope_max_timescale: 10000000
+partial_rotary_factor: 0.25
+use_mrope: False                     # mrope увімкнемо на мультимодальному етапі
+
+# --- MTP ---
+# MTP у MaxText 0.2.5 несумісний з qwen3_5 (викликає блок з kwarg `inputs`) → поки вимкнено.
+# TODO: латка multi_token_prediction.py для qwen3_5
+mtp_num_layers: 0
+mtp_loss_scaling_factor: 0.1
+
+enable_dropout: False
+
+# --- Оптимізатор: Muon для матриць, AdamW для решти ---
+opt_type: "muon"
+muon_type: "optax_muon"
+muon_beta: 0.95
+muon_weight_decay: 0.1
+muon_consistent_rms: 0.2             # дозволяє брати LR в масштабі AdamW
+muon_include_routers: False          # роутер — AdamW
+learning_rate: 2.0e-3               # м'якше за стадію 1: ваги вже навчені
+# WSD: стабільний LR більшість часу → ростимо наступну стадію з чекпоінта ДО спаду;
+# спад (останні 15%) = annealing з домішкою інструкцій → проміжний реліз
+lr_schedule_type: "wsd"
+warmup_steps_fraction: 0.01
+wsd_decay_steps_fraction: 0.15
+learning_rate_final_fraction: 0.1
+adam_b1: 0.9
+adam_b2: 0.95
+adam_weight_decay: 0.1
+gradient_clipping_threshold: 1.0
+
+# --- Дані: Megatron mmap (.bin/.idx int32), зважена суміш ---
+dataset_type: "grain"
+grain_file_type: "mmap"
+grain_train_files: ""                # підставляє train.py
+mmap_eod_id: 131072                  # <|endoftext|>
+grain_worker_count: 1
+tokenizer_type: "huggingface"
+tokenizer_path: "out/tokenizer_pruned"
+max_target_length: 4096
+
+# --- Батч: 8 чипів * 4 * 4096 = 131k токенів на крок (як стадія 1 на H200) ---
+per_device_batch_size: 4
+gradient_accumulation_steps: 1
+steps: 40000                         # підставляє train.py під бюджет годин
+
+# --- Шардинг на v5e-8 ---
+ici_fsdp_parallelism: -1
+ici_expert_parallelism: 1            # почнемо з FSDP; EP=8 спробуємо як оптимізацію
+remat_policy: "full"
+dtype: "bfloat16"
+weight_dtype: "float32"
+
+# --- Виживання на Kaggle: часті чекпоінти ---
+enable_checkpointing: True
+async_checkpointing: True
+checkpoint_period: 500
+log_period: 20
+

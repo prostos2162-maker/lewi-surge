@@ -1,0 +1,31 @@
+{
+  "id": "steflett/lewi-surge-long",
+  "title": "lewi-surge-long",
+  "code_file": "train.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": false,
+  "enable_tpu": true,
+  "enable_internet": true,
+  "machine_shape": "TpuV5E8",
+  "docker_image": "gcr.io/kaggle-private-byod/python-tpuvm@sha256:bc3c1d3db8f7b8d2e9f9102d34b10155149dab7d10460c6a2ab8bcea92ef433f",
+  "dataset_sources": [
+    "steflett/lewi-surge-sft2-hf",
+    "steflett/lewi-sft3"
+  ],
+  "kernel_sources": [
+    "steflett/moe-tok3-long",
+    "steflett/moe-tok3-long2",
+    "steflett/moe-tok3-long3",
+    "steflett/moe-tok3-anneal",
+    "steflett/moe-tok3-instruct",
+    "steflett/moe-tok3-cosmo",
+    "steflett/moe-tok2-math",
+    "steflett/moe-tok2-uk",
+    "steflett/moe-tok2-code1",
+    "steflett/moe-tok2-design"
+  ],
+  "competition_sources": [],
+  "model_sources": []
+}

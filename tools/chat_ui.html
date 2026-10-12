@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Lewi Surge Beta</title>
+<style>
+  :root {
+    --bg: #f6f5f2; --panel: #ffffff; --text: #1d1d1f; --muted: #6e6e73; --line: #e3e1dc;
+    --me: #1d1d1f; --me-text: #ffffff; --accent: #ff5a1f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111113; --panel: #1b1b1f; --text: #ededf0; --muted: #9a9aa2; --line: #2a2a30;
+            --me: #ededf0; --me-text: #111113; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column; background: var(--bg); color: var(--text);
+         font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding: 14px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: baseline; gap: 10px; }
+  header b { font-size: 17px; letter-spacing: -0.01em; }
+  header .tag { font-size: 11px; color: var(--accent); border: 1px solid var(--accent); border-radius: 99px; padding: 1px 8px; }
+  header .sub { margin-left: auto; color: var(--muted); font-size: 12px; }
+  #log { flex: 1; overflow-y: auto; padding: 24px 16px; }
+  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; }
+  .msg { white-space: pre-wrap; word-wrap: break-word; padding: 10px 14px; border-radius: 16px; max-width: 85%; }
+  .user { align-self: flex-end; background: var(--me); color: var(--me-text); border-bottom-right-radius: 4px; }
+  .bot { align-self: flex-start; background: var(--panel); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .bot.typing::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .empty { color: var(--muted); text-align: center; margin-top: 18vh; }
+  .empty h2 { color: var(--text); font-weight: 600; margin: 0 0 6px; }
+  form { border-top: 1px solid var(--line); padding: 12px 16px; background: var(--bg); }
+  .bar { max-width: 760px; margin: 0 auto; display: flex; gap: 8px; align-items: flex-end; }
+  textarea { flex: 1; resize: none; max-height: 180px; padding: 11px 14px; border-radius: 14px; border: 1px solid var(--line);
+             background: var(--panel); color: var(--text); font: inherit; outline: none; }
+  textarea:focus { border-color: var(--accent); }
+  button { border: 0; border-radius: 12px; padding: 11px 16px; font: inherit; font-weight: 600; cursor: pointer;
+           background: var(--accent); color: #fff; }
+  button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); }
+  button:disabled { opacity: .5; cursor: default; }
+  .hint { max-width: 760px; margin: 6px auto 0; color: var(--muted); font-size: 11px; display: flex; gap: 12px; }
+  .hint label { display: flex; gap: 6px; align-items: center; }
+  @media (max-width: 600px) { .msg { max-width: 95%; } header .sub { display: none; } }
+</style>
+</head>
+<body>
+<header><b>Lewi Surge</b><span class="tag">beta</span><span class="sub">open MoE · Polite Chainsaw · ранній прев'ю, може помилятися</span></header>
+<div id="log"><div class="wrap" id="wrap">
+  <div class="empty" id="empty"><h2>Привіт, я Lewi.</h2>Напиши щось — англійською я поки говорю найкраще.</div>
+</div></div>
+<form id="f">
+  <div class="bar">
+    <textarea id="q" rows="1" placeholder="Повідомлення…" autofocus></textarea>
+    <button id="send" type="submit">Надіслати</button>
+    <button id="stop" type="button" class="ghost" hidden>Стоп</button>
+    <button id="clear" type="button" class="ghost" title="Новий чат">↺</button>
+  </div>
+  <div class="hint">
+    <label>температура <input id="temp" type="range" min="0.1" max="1.2" step="0.1" value="0.7"><span id="tv">0.7</span></label>
+    <span>Enter — надіслати, Shift+Enter — новий рядок</span>
+  </div>
+</form>
+<script>
+const wrap = document.getElementById("wrap"), log = document.getElementById("log"), q = document.getElementById("q");
+const send = document.getElementById("send"), stopBtn = document.getElementById("stop"), temp = document.getElementById("temp");
+let history = [], ctrl = null;
+temp.oninput = () => document.getElementById("tv").textContent = temp.value;
+
+function add(role, text) {
+  document.getElementById("empty")?.remove();
+  const d = document.createElement("div");
+  d.className = "msg " + (role === "user" ? "user" : "bot");
+  d.textContent = text;
+  wrap.appendChild(d);
+  log.scrollTop = log.scrollHeight;
+  return d;
+}
+
+async function ask(text) {
+  history.push({role: "user", content: text});
+  add("user", text);
+  const bot = add("bot", "");
+  bot.classList.add("typing");
+  send.disabled = true; stopBtn.hidden = false;
+  ctrl = new AbortController();
+  let out = "";
+  try {
+    const api = location.protocol === "file:" ? "http://127.0.0.1:7860/chat" : "/chat";
+    const r = await fetch(api, {method: "POST", signal: ctrl.signal,
+      body: JSON.stringify({messages: history, temperature: +temp.value})});
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    for (;;) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      out += dec.decode(value, {stream: true});
+      bot.textContent = out;
+      log.scrollTop = log.scrollHeight;
+    }
+  } catch (e) {
+    if (e.name !== "AbortError") bot.textContent = out + "\n[помилка: " + e.message + "]";
+  }
+  bot.classList.remove("typing");
+  history.push({role: "assistant", content: out.trim()});
+  send.disabled = false; stopBtn.hidden = true; q.focus();
+}
+
+document.getElementById("f").onsubmit = e => {
+  e.preventDefault();
+  const t = q.value.trim();
+  if (!t || send.disabled) return;
+  q.value = ""; q.style.height = "";
+  ask(t);
+};
+q.onkeydown = e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); document.getElementById("f").requestSubmit(); } };
+q.oninput = () => { q.style.height = ""; q.style.height = Math.min(q.scrollHeight, 180) + "px"; };
+stopBtn.onclick = () => ctrl?.abort();
+document.getElementById("clear").onclick = () => {
+  ctrl?.abort(); history = [];
+  wrap.innerHTML = '<div class="empty" id="empty"><h2>Новий чат</h2>Пиши.</div>';
+};
+</script>
+</body>
+</html>

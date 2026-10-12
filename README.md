@@ -42,27 +42,72 @@ took it to ~75k tokens/s on H100 and ~91k on H200, with identical math:
 
 The same code also runs on TPU through native megablox kernels (`colab/tpu_smoke.sh`).
 
+## Stage 2: Lewi Surge Preview 3.45B-A0.5B (code-first)
+
+| | |
+|---|---|
+| Growth | from stage 1 without restarting: experts split 64 → 128, one more block of layers (12 → 16) |
+| Shape | d_model 1024, 16 layers (4 × [3 Gated DeltaNet + 1 full attention]), 128 experts, top-6 + 1 shared |
+| Parameters | ~3.45B total / ~0.5B active |
+| Pretraining | ~1.6B tokens of curated code (with FIM), instructions and textbooks, 1× H200 |
+| Annealing | ~1.4B tokens, more than half conversations, LR decayed to zero |
+| Fine-tuning | chat SFT on conversations up to 16k tokens |
+
+Base model before → after code-focused annealing (greedy decoding, standard prompts, local runs):
+
+| Benchmark | Metric | Before | After |
+|---|---|---|---|
+| HumanEval | pass@1 | 18.9% | 25.0% |
+| MBPP (sanitized) | pass@1 | 23.7% | 29.6% |
+| HellaSwag | acc_norm | 41.9% | 43.4% |
+| ARC-Challenge | acc_norm | 26.5% | 27.4% |
+
+Only 4 of 16 layers keep a KV cache (2 KV heads each), about 4 KB per token, so a 128k-token
+context fits in roughly half a gigabyte.
+
+## Stage 3 (running): 128k context + SFT on TPU v5e-8
+
+Kaggle TPU v5e-8, single session (`kaggle/long/`):
+
+1. convert the HF checkpoint to MaxText, AOT-compile every phase for `v5e-8` first
+   (catches HBM OOM before a TPU-hour is spent)
+2. **long-context stage at 131,072 tokens** — context parallelism across all 8 chips
+   (`ici_context_parallelism=8`, `per_device_batch_size=0.125`, load balancing off for GDN),
+   vocab tiling, flash attention; long data from PG-19, code repositories, SWE agent traces,
+   long educational/math documents (ProLong mix)
+3. **SFT** at 16k on 382k conversations (`tools/build_sft3.py`), completion-only loss
+4. export bf16 params after each phase; only complete Orbax checkpoints are ever loaded
+
+Lessons that cost real TPU time are written down in the scripts as comments: a fresh `run_name`
+per session (MaxText silently prefers the run-dir checkpoint over `load_parameters_path`),
+synchronous checkpoints for SFT, Grain iterator exhaustion, and Kaggle image package conflicts.
+
 ## Repository layout
 
 - `configs/` — MaxText configs per stage
-- `modal/` — GPU performance patches and benchmarks (run on Modal)
-- `lightning/` — stage-1 training orchestrator (auto-restart on preemption, checkpoint
-  resume, budget-aware step count), Hugging Face export
-- `kaggle/` — tokenization into Megatron mmap shards on Kaggle CPU sessions;
-  `tok2/` prepares stage-2 data (code with FIM, uk/es/pt/fr/de, math, SVG/design)
+- `modal/` — GPU performance patches and benchmarks; `stage2.py` runs SFT on Modal
+- `lightning/` — training orchestrators for stage 1, growth and annealing (auto-restart on
+  preemption, checkpoint resume, budget-aware step count), checkpoint pulls, Hugging Face export
+- `kaggle/` — data and TPU runs on Kaggle:
+  `tokenize/`, `tok2/`, `tok3/` tokenize the data mixes on CPU sessions (code with FIM,
+  uk/es/pt/fr/de, math, SVG/design, conversations, long documents, SWE traces);
+  `stage2/` and `long/` are TPU training notebooks
 - `tokenizer/` — vocabulary analysis and pruning
-- `colab/` — TPU smoke test
-- `tools/generate.py` — sampling from an exported checkpoint with `transformers`
+- `colab/` — TPU smoke tests
+- `tools/` — benchmarks (`bench.py`), SFT data builder, sampling and a small local chat UI
+- `docs/data.md` — datasets and licences
 
 ## Roadmap
 
-1. **Stage 2** — grow the model (expert splitting + layer stacking) and add code (~30%, with
-   FIM), Ukrainian, Spanish, Portuguese, French, German, math and SVG/design data
-2. **Stage 3** — ~10B total, longer context
-3. **Lewi Surge 24B2A** — distillation from an open teacher, 200k+ context
-4. Post-training: SFT, reasoning (GRPO), tool calling, then vision and audio
+1. **Now** — 128k context + second SFT on TPU (stage 3 above)
+2. Reasoning and tool-use fine-tuning, reinforcement learning on code with unit-test rewards
+3. **Lewi Surge 24B2A** — the full-size model (24B total / 2B active), grown from the preview
+4. Vision and audio through trained projectors
 
-Weights of each stage will be released openly.
+Weights of each stage will be released openly on Hugging Face.
+
+Built by one person with the help of AI coding assistants. Project page:
+<https://politechainsaw.com/lewi/> · support the GPU hours: <https://ko-fi.com/politechainsaw>
 
 ## License
 

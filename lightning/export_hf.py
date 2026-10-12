@@ -58,13 +58,16 @@ def main():
     ap.add_argument("--step", type=int, required=True)
     args = ap.parse_args()
     s = Studio(name=NAME, teamspace=TEAMSPACE, user=USER)
+    if "Running" not in str(s.status):  # експорту досить CPU (H200 не палимо)
+        from lightning_sdk import Machine
+        s.start(Machine.CPU)
     cmd = EXPORT.replace("__STEP__", str(args.step)).replace("__DIMS__", DIMS)
     tmp = os.path.join(ROOT, "out", "lt", "export.sh")
     with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(cmd)
     s.upload_file(tmp, "export.sh")
     s.upload_file(os.path.join(ROOT, "lightning", "hf_export_wrapper.py"), "hf_export_wrapper.py")
-    s.run("cd ~ && for i in $(seq 60); do ls export.sh hf_export_wrapper.py >/dev/null 2>&1 && break; sleep 2; done; "
+    s.run("cd ~ && for i in $(seq 200); do ls export.sh hf_export_wrapper.py >/dev/null 2>&1 && break; sleep 3; done; "
           "mv export.sh hf_export_wrapper.py moe/")
     s.run(f"cd ~/moe && nohup bash export.sh > ~/export_{args.step}.log 2>&1 &")
     for _ in range(120):

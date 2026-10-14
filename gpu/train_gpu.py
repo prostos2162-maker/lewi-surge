@@ -30,7 +30,11 @@ OUT = f"{W}/out"
 os.makedirs(OUT, exist_ok=True)
 SEQ = int(os.environ.get("SEQ", "8192"))
 GLOBAL_SEQS = int(os.environ.get("GLOBAL_SEQS", "32"))  # як у SFT2 на Modal: 32 послідовності на крок
-EXPORT_EVERY = int(os.environ.get("EXPORT_EVERY", "1000"))
+EXPORT_EVERY = int(os.environ.get("EXPORT_EVERY", "250"))
+# продовження після втрати сесії (Colab може прибити VM): беремо останній вивантажений експорт з REPO_RUNS
+RESUME_FROM = os.environ.get("RESUME_FROM", "")      # напр. "sft3_gpu/step750"
+DONE = int(os.environ.get("DONE_STEPS", "0"))       # скільки кроків уже пройдено до цього експорту
+TOTAL = int(os.environ.get("TOTAL_STEPS", "0"))     # повний план кроків (з першої проби), щоб не міряти знову
 REPO_RUNS = os.environ.get("REPO_RUNS", "PoliteChainsaw/lewi-surge-runs")
 RUN = os.environ.get("RUN", "sft3_gpu")
 
@@ -82,7 +86,11 @@ if i >= 0 and "QWEN3_5" not in src[i:i + 600]:
 HF_IN = f"{W}/hf_in"
 DATA = f"{W}/data"
 if not os.path.exists(f"{HF_IN}/config.json"):
-    sh(f"hf download PoliteChainsaw/Lewi-Surge-Preview-3B-Chat-Early --local-dir {HF_IN}")
+    if RESUME_FROM:
+        sh(f"hf download {REPO_RUNS} --include '{RESUME_FROM}/*' --local-dir {W}/resume_dl")
+        shutil.copytree(f"{W}/resume_dl/{RESUME_FROM}", HF_IN, dirs_exist_ok=True)
+    else:
+        sh(f"hf download PoliteChainsaw/Lewi-Surge-Preview-3B-Chat-Early --local-dir {HF_IN}")
 if not os.path.exists(f"{DATA}/train.parquet"):
     sh(f"hf download PoliteChainsaw/lewi-sft3 --repo-type dataset --local-dir {DATA}")
 TOK = f"{DATA}/tokenizer_sft"
@@ -90,6 +98,7 @@ assert os.path.exists(f"{TOK}/tokenizer.json") and os.path.exists(f"{DATA}/train
 
 # ---------------------------------------------------------------- 4. експорт (bf16 MaxText + HF) і вивантаження
 def export_upload(step, items):  # noqa: E302
+    step += DONE  # глобальний номер кроку з урахуванням попередніх сесій
     dst = f"{W}/hf_out/step{step}"
     shutil.rmtree(dst, ignore_errors=True)
     rc = sh(f"LEWI_LAYERS=16 LEWI_EXPERTS=128 JAX_PLATFORMS=cpu nice -n 10 {sys.executable} {W}/src/conv_wrapper.py "
@@ -167,7 +176,7 @@ COMMON = DIMS + [
     f"per_device_batch_size={PDB}", f"gradient_accumulation_steps={GA}", f"max_target_length={SEQ}",
     "dataset_type=hf", "hf_path=parquet", f"hf_train_files={DATA}/train.parquet", "train_data_columns=['messages']",
     "sft_train_on_completion_only=True", "packing=True", "num_epoch=2",
-    "opt_type=adamw", "learning_rate=5e-5", "lr_schedule_type=cosine", "warmup_steps_fraction=0.03",
+    "opt_type=adamw", "lr_schedule_type=cosine", "warmup_steps_fraction=0.03",
     "learning_rate_final_fraction=0.1", f"base_output_directory={OUT}", "async_checkpointing=False",
     "max_num_checkpoints_to_keep=2"]
 ENV = dict(os.environ, XLA_PYTHON_CLIENT_MEM_FRACTION="0.95", TF_CPP_MIN_LOG_LEVEL="1", PYTHONUNBUFFERED="1")
@@ -195,6 +204,8 @@ def run(args, name, until, on_line=None):
 resume = ckpts(f"{OUT}/{RUN}")
 state_f = f"{W}/state.json"
 state = json.load(open(state_f)) if os.path.exists(state_f) else {}
+if "steps" not in state and TOTAL:
+    state = {"steps": TOTAL, "speed": 15000.0, "per_step": PDB * GA * N_GPU * SEQ, "time_steps": TOTAL, "data_steps": TOTAL}
 if "steps" not in state:
     rc, txt = run(COMMON + [f"load_parameters_path={LOAD}", "run_name=probe", "steps=8", "enable_checkpointing=False",
                             "log_period=1", "learning_rate=0"], "probe", time.time() + 3600)
@@ -214,14 +225,16 @@ if "steps" not in state:
              "time_steps": time_steps, "data_steps": data_steps}
     json.dump(state, open(state_f, "w"))
     shutil.rmtree(f"{OUT}/probe", ignore_errors=True)
-steps = state["steps"]
+steps = state["steps"] - DONE
+import math
+LR0 = 5e-5 * (0.1 + 0.9 * 0.5 * (1 + math.cos(math.pi * DONE / state["steps"])))  # продовжуємо косинус з місця обриву
 exporting["last"] = max([s for s, _ in resume], default=0)
 log(f"SFT: {steps} кроків × {state['per_step'] / 1e6:.2f}M токенів = {steps * state['per_step'] / 1e9:.2f}B, "
     f"{state['speed']:.0f} ток/с (час дозволяє {state['time_steps']}, дані ~{state['data_steps']})")
 
 
 # ---------------------------------------------------------------- 5. SFT
-args = COMMON + [f"steps={steps}", f"learning_rate_schedule_steps={steps}", f"run_name={RUN}",
+args = COMMON + [f"learning_rate={LR0}", f"steps={steps}", f"learning_rate_schedule_steps={steps}", f"run_name={RUN}",
                  "enable_checkpointing=True", "checkpoint_period=250", "log_period=10"]
 if not resume:
     args.append(f"load_parameters_path={LOAD}")  # при продовженні MaxText сам бере останній чекпоінт з run-теки

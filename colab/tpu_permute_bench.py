@@ -71,16 +71,16 @@ def main():
 
     t_xla_g = bench(jax.jit(lambda a, i: jnp.take(a, i, axis=0)), x, order // k)
     mp.CFG["enabled"] = False
-    t_xla_r = bench(jax.jit(mp.gather_reduce), y, pos.reshape(n, k), w)
-    t_xla_d = bench(jax.jit(mp.gather_dot), y, pos.reshape(n, k), g)
+    t_xla_r = bench(jax.jit(lambda a, b, c: mp.gather_reduce(a, b, c)), y, pos.reshape(n, k), w)
+    t_xla_d = bench(jax.jit(lambda a, b, c: mp.gather_dot(a, b, c)), y, pos.reshape(n, k), g)
     mp.CFG["enabled"] = True
     print(f"  XLA: gather {t_xla_g:.2f} ms ({gbytes_rows / t_xla_g:.0f} GB/s) | gather_reduce {t_xla_r:.2f} | gather_dot {t_xla_d:.2f}")
     for tile in TILES:
       mp.CFG["tile"] = tile
       try:
-        t_g = bench(jax.jit(mp.gather_rows), x, order // k)
-        t_r = bench(jax.jit(mp.gather_reduce), y, pos.reshape(n, k), w)
-        t_d = bench(jax.jit(mp.gather_dot), y, pos.reshape(n, k), g)
+        t_g = bench(jax.jit(lambda a, b: mp.gather_rows(a, b)), x, order // k)  # fresh jit: CFG is read at trace time
+        t_r = bench(jax.jit(lambda a, b, c: mp.gather_reduce(a, b, c)), y, pos.reshape(n, k), w)
+        t_d = bench(jax.jit(lambda a, b, c: mp.gather_dot(a, b, c)), y, pos.reshape(n, k), g)
         print(f"  kernel tile={tile}: gather {t_g:.2f} ms ({gbytes_rows / t_g:.0f} GB/s) | gather_reduce {t_r:.2f} | gather_dot {t_d:.2f}")
         rows.append((name, f"kernel tile={tile}", f"{t_g:.2f}/{t_r:.2f}/{t_d:.2f}", f"xla {t_xla_g:.2f}/{t_xla_r:.2f}/{t_xla_d:.2f}"))
       except Exception as e:  # noqa: BLE001

@@ -9,7 +9,12 @@ ZONES=${ZONES:-"us-central1-b us-east1-d us-east5-a europe-west4-a asia-south1-c
 say() { echo "$(date '+%m-%d %H:%M') $*" | tee -a $LOG; }
 START=$(date +%s)
 export CLOUDSDK_CORE_DISABLE_PROMPTS=1
-tpu_zone() { gcloud compute tpus tpu-vm list --format="value(name,zone,state)" 2>/dev/null | tr -d '\r' | awk -v n=$N '$1==n{print $2" "$3}'; }
+tpu_zone() {  # list вимагає зону → перебираємо наші зони
+  for z in $ZONES; do
+    st=$(gcloud compute tpus tpu-vm describe $N --zone=$z --format="value(state)" 2>/dev/null | tr -d '\r')
+    [ -n "$st" ] && { echo "$z $st"; return 0; }
+  done
+}
 create() {
   for z in $ZONES; do
     say "створюю $N у $z (spot)"

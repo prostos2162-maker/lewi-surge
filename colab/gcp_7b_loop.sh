@@ -23,7 +23,7 @@ setup_and_run() {  # $1 zone
   for i in $(seq 20); do $S --command="true" >/dev/null 2>&1 && break; sleep 20; done
   gcloud compute tpus tpu-vm scp /d/ai/colab/gcp_setup.sh /d/ai/colab/gcp_lewi7b.sh /d/ai/colab/vm_guard7b.sh /d/ai/configs/stage2.yml $HOME/.kaggle/kaggle.json $N:~/ --zone=$z --ssh-key-file=$HOME/.ssh/gcp_tpu --quiet 2>&1 | tail -1
   $S --command="mv -f ~/kaggle.json ~/kcred.json; sed -i 's/\r$//' ~/*.sh; bash ~/gcp_setup.sh > ~/setup.log 2>&1; tail -2 ~/setup.log" 2>&1 | tail -2 | tee -a $LOG
-  $S --command="export TPU_ZONE=$z TPU_NAME=$N STAGE_TOKENS=${STAGE_TOKENS:-10000000000} PDB=${PDB:-16} REMAT=${REMAT:-minimal}; nohup bash ~/gcp_lewi7b.sh > ~/go.log 2>&1 < /dev/null & disown; echo started" 2>&1 | tail -1 | tee -a $LOG
+  $S --command="export TPU_ZONE=$z TPU_NAME=$N STAGE_TOKENS=${STAGE_TOKENS:-10000000000} PDB=${PDB:-16} REMAT=${REMAT:-minimal} VARIANT=${VARIANT:-k12}; nohup bash ~/gcp_lewi7b.sh > ~/go.log 2>&1 < /dev/null & disown; echo started" 2>&1 | tail -1 | tee -a $LOG
 }
 status() {  # $1 zone → останній рядок прогресу
   gcloud compute tpus tpu-vm ssh $N --zone=$1 --ssh-key-file=$HOME/.ssh/gcp_tpu --quiet --command="grep -E 'completed step' ~/lewi7b/train.log 2>/dev/null | tail -1 | cut -c1-160; grep -E 'STAGE_DONE|ALL_DONE|ВПАЛ|НЕМАЄ|ПОРОЖН' ~/go.log 2>/dev/null | tail -1" 2>/dev/null | tr -d '\r'

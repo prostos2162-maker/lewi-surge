@@ -63,6 +63,10 @@ def save_file(tensors, path, metadata=None):
 src, dst = sys.argv[1], sys.argv[2]
 MERGE = "--no-merge" not in sys.argv
 DUP = True
+# --pairs=usage: пара = (i-й найуживаніший, i-й найменш уживаний) за expert_usage.json у SRC; --eps=0.1: масштаб
+# down_proj слабкого партнера (0 = партнер вимкнений на старті, вчиться з нуля); логіт роутера = сильного експерта.
+PAIRS = next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--pairs=")), "adjacent")
+EPS = float(next((a.split("=", 1)[1] for a in sys.argv if a.startswith("--eps=")), "0.5"))
 CYCLE = 4
 os.makedirs(dst, exist_ok=True)
 
@@ -82,18 +86,29 @@ ZERO_OUT = ("linear_attn.out_proj.weight", "self_attn.o_proj.weight", "mlp.exper
 P = "model.language_model."
 
 
-def merge_experts(name, a):
+USAGE = json.load(open(f"{src}/expert_usage.json")) if PAIRS == "usage" and os.path.exists(f"{src}/expert_usage.json") else None
+
+
+def pairing(layer):
+    """Повертає (strong[E/2], weak[E/2]): індекси експертів, що склеюються."""
+    if USAGE is not None:
+        order = np.argsort(-np.asarray(USAGE[str(layer)]))   # від найуживанішого
+        return order[: E // 2], order[E // 2:][::-1]          # i-й сильний + i-й найслабший
+    idx = np.arange(E)
+    return idx[0::2], idx[1::2]
+
+
+def merge_experts(name, a, layer):
     """a: тензор одного шару; повертає тензор для E/2 експертів по 2I."""
+    sa, sb = pairing(layer)
     if name.endswith("mlp.experts.gate_up_proj"):          # [E, 2I, H]: рядки 0..I-1 = gate, I..2I-1 = up
         g, u = a[:, :I, :], a[:, I:, :]
-        g2 = g.reshape(E // 2, 2 * I, H)                    # пара (2j, 2j+1) → gate_a; gate_b по рядках
-        u2 = u.reshape(E // 2, 2 * I, H)
-        return np.concatenate([g2, u2], axis=1)             # [E/2, 4I, H] = [gate_a gate_b | up_a up_b]
-    if name.endswith("mlp.experts.down_proj"):              # [E, H, I]
-        d = a.reshape(E // 2, 2, H, I).transpose(0, 2, 1, 3).reshape(E // 2, H, 2 * I)
-        return (d.astype(np.float32) * 0.5).astype(a.dtype)
-    if name.endswith("mlp.gate.weight"):                    # [E, H] → середнє пари
-        return a.reshape(E // 2, 2, H).astype(np.float32).mean(axis=1).astype(a.dtype)
+        return np.concatenate([g[sa], g[sb], u[sa], u[sb]], axis=1)   # [E/2, 4I, H] = [gate_a gate_b | up_a up_b]
+    if name.endswith("mlp.experts.down_proj"):              # [E, H, I] → [E/2, H, 2I] = [down_a | eps*down_b]
+        db = (a[sb].astype(np.float32) * EPS).astype(a.dtype)
+        return np.concatenate([a[sa], db], axis=2)
+    if name.endswith("mlp.gate.weight"):                    # [E, H] → логіт сильного
+        return a[sa]
     return a
 
 
@@ -141,7 +156,7 @@ for c in range(L // CYCLE):
                 name = k.split(f"layers.{old}.", 1)[1]
                 a = load(k)
                 if MERGE:
-                    a = merge_experts(name, a)
+                    a = merge_experts(name, a, old)
                 if copy_ == 1 and any(name.endswith(z) for z in ZERO_OUT):
                     a = np.zeros_like(a)
                 put(f"{P}layers.{new_li}.{name}", a)

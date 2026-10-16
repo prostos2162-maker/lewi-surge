@@ -14,7 +14,10 @@ for f in modal/gdn_fast.py kaggle/stage2/conv_wrapper.py tools/grow_7b.py colab/
 cp ~/stage2.yml $W/src/configs/
 PKG=$(python -c "import maxtext,os;print(os.path.dirname(maxtext.__file__))"); CFG=$PKG/configs/stage2.yml; cp $W/src/configs/stage2.yml $CFG
 RUN=${RUN:-7b_s1}; CKPT=gs://lewi-data/ckpt; STAGE_TOKENS=${STAGE_TOKENS:-10000000000}; PDB=${PDB:-16}; SEQ=4096
-DIMS="base_emb_dim=1024 base_num_decoder_layers=32 base_num_query_heads=8 base_num_kv_heads=2 head_dim=128 base_mlp_dim=512 base_moe_mlp_dim=1024 num_experts=64 shared_experts=1 num_experts_per_tok=6 vocab_size=131200 logits_via_embedding=True inhomogeneous_layer_cycle_interval=4 gdn_num_key_heads=4 gdn_num_value_heads=8 gdn_key_head_dim=128 gdn_value_head_dim=128 gdn_conv_kernel_dim=4 use_mrope=False mtp_num_layers=0 use_multimodal=False"
+# VARIANT=k12: 128 експертів × 512, top-12 (точний ріст, +0.065 лосу); VARIANT=m64: 64 × 1024, top-6 (склейка, +0.23, +19% швидкості)
+VARIANT=${VARIANT:-k12}
+if [ "$VARIANT" = m64 ]; then NE=64; MD=1024; TK=6; GROW_ARGS="--pairs=usage --eps=0"; else NE=128; MD=512; TK=12; GROW_ARGS="--no-merge"; fi
+DIMS="base_emb_dim=1024 base_num_decoder_layers=32 base_num_query_heads=8 base_num_kv_heads=2 head_dim=128 base_mlp_dim=512 base_moe_mlp_dim=$MD num_experts=$NE shared_experts=1 num_experts_per_tok=$TK vocab_size=131200 logits_via_embedding=True inhomogeneous_layer_cycle_interval=4 gdn_num_key_heads=4 gdn_num_value_heads=8 gdn_key_head_dim=128 gdn_value_head_dim=128 gdn_conv_kernel_dim=4 use_mrope=False mtp_num_layers=0 use_multimodal=False"
 
 # ---- 1. дані етапу 1 з бакета (той самий регіон → без плати за трафік)
 gcloud storage rsync gs://lewi-data/stage1 $W/data > $W/rsync.log 2>&1 || { echo "ДАНІ НЕ СКАЧАЛИСЬ"; exit 1; }
@@ -32,17 +35,23 @@ TOK=$W/data/tokenizer; mkdir -p $TOK; gcloud storage cp gs://lewi-data/tokenizer
 LAST=$(gcloud storage ls $CKPT/$RUN/checkpoints/ 2>/dev/null | grep -E '/[0-9]+/$' | sed 's|.*/\([0-9]*\)/$|\1|' | sort -n | tail -1)
 LOADARG=""
 if [ -z "$LAST" ]; then
-  if ! gcloud storage ls gs://lewi-data/init7b/items/_METADATA > /dev/null 2>&1; then
+  if ! gcloud storage ls gs://lewi-data/init7b_$VARIANT/items/_METADATA > /dev/null 2>&1; then
     dl() { for f in $(kaggle datasets files $1 | awk 'NR>2{print $1}'); do kaggle datasets download $1 -f $f -p $2 || return 1; done; }
     [ -f $W/hf_in/config.json ] || dl steflett/lewi-long-b-step1142 $W/hf_in
-    [ -f $W/hf_grown/config.json ] || python $W/src/grow_7b.py $W/hf_in $W/hf_grown > $W/grow.log 2>&1 || { echo "РІСТ ВПАВ"; exit 1; }
-    LEWI_LAYERS=32 LEWI_EXPERTS=64 LEWI_MOE_DIM=1024 LEWI_SHARED_DIM=512 JAX_PLATFORMS=cpu python $W/src/conv_wrapper.py to_maxtext $CFG \
+    if [ "$VARIANT" = m64 ] && [ ! -f $W/hf_in/expert_usage.json ]; then gcloud storage cp gs://lewi-data/init7b_m64/expert_usage.json $W/hf_in/ || { echo "НЕМАЄ expert_usage.json"; exit 1; }; fi
+    [ -f $W/hf_grown/config.json ] || python $W/src/grow_7b.py $W/hf_in $W/hf_grown $GROW_ARGS > $W/grow.log 2>&1 || { echo "РІСТ ВПАВ"; exit 1; }
+    python - <<PY
+import json; c=json.load(open("$W/hf_grown/config.json")); t=c.get("text_config",c); t["num_experts_per_tok"]=$TK
+if "text_config" in c: c["text_config"]=t
+json.dump(c,open("$W/hf_grown/config.json","w"),indent=2)
+PY
+    LEWI_LAYERS=32 LEWI_EXPERTS=$NE LEWI_MOE_DIM=$MD LEWI_SHARED_DIM=512 LEWI_TOPK=$TK JAX_PLATFORMS=cpu python $W/src/conv_wrapper.py to_maxtext $CFG \
       model_name=qwen3.5-35b-a3b override_model_config=True dataset_type=synthetic $DIMS base_output_directory=$W/mt_in \
       hardware=cpu skip_jax_distributed_system=True scan_layers=True --hf_model_path=$W/hf_grown > $W/convert.log 2>&1 || { echo "КОНВЕРТАЦІЯ ВПАЛА"; exit 1; }
     ITEMS=$(ls -d $W/mt_in/*/items $W/mt_in/*/*/items 2>/dev/null | head -1); [ -n "$ITEMS" ] || { echo "НЕМАЄ items"; exit 1; }
-    gcloud storage rsync -r $ITEMS gs://lewi-data/init7b/items > /dev/null 2>&1   # щоб після витіснення не рости знову
+    gcloud storage rsync -r $ITEMS gs://lewi-data/init7b_$VARIANT/items > /dev/null 2>&1   # щоб після витіснення не рости знову
   fi
-  LOADARG="load_parameters_path=gs://lewi-data/init7b/items"
+  LOADARG="load_parameters_path=gs://lewi-data/init7b_$VARIANT/items"
 fi
 echo "LAST=$LAST LOADARG=$LOADARG"
 

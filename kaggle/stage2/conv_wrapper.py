@@ -23,7 +23,9 @@ OUR = {
 import os
 _L = int(os.environ.get("LEWI_LAYERS", 12))
 _E = int(os.environ.get("LEWI_EXPERTS", 64))
-OUR.update({"num_hidden_layers": _L, "num_experts": _E,
+_M = int(os.environ.get("LEWI_MOE_DIM", 512))      # розмір експерта (7B-A1B: 1024)
+_S = int(os.environ.get("LEWI_SHARED_DIM", 512))   # розмір спільного експерта
+OUR.update({"num_hidden_layers": _L, "num_experts": _E, "moe_intermediate_size": _M, "shared_expert_intermediate_size": _S,
             "layer_types": (["linear_attention"] * 3 + ["full_attention"]) * (_L // 4)})
 
 d = copy.deepcopy(H.qwen3_5_35b_a3b_dict)

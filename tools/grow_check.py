@@ -15,9 +15,10 @@ import time
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-orig, grown = sys.argv[1], sys.argv[2]
-N = int(sys.argv[3]) if len(sys.argv) > 3 else 24
-MAXT = int(sys.argv[4]) if len(sys.argv) > 4 else 1024
+orig, grown = (sys.argv[1], sys.argv[2]) if __name__ == "__main__" else (None, None)
+
+N = int(sys.argv[3]) if __name__ == "__main__" and len(sys.argv) > 3 else 24
+MAXT = int(sys.argv[4]) if __name__ == "__main__" and len(sys.argv) > 4 else 1024
 torch.set_num_threads(os.cpu_count())
 
 
@@ -37,30 +38,37 @@ def docs():
     return out or ["The quick brown fox jumps over the lazy dog. " * 200, "Київ — столиця України, одне з найбільших міст Європи. " * 100]
 
 
-tok = AutoTokenizer.from_pretrained(orig)
-texts = docs()[:N]
-enc = [tok(t, return_tensors="pt", truncation=True, max_length=MAXT).input_ids for t in texts]
-print(f"{len(enc)} документів, разом {sum(e.shape[1] for e in enc)} токенів")
 
 
-def mean_loss(path):
-    t0 = time.time()
-    m = AutoModelForCausalLM.from_pretrained(path, dtype=torch.bfloat16, device_map="cpu")
-    m.eval()
-    tot, n = 0.0, 0
-    with torch.no_grad():
-        for i, ids in enumerate(enc):
-            out = m(ids, labels=ids)
-            k = ids.shape[1] - 1
-            tot += float(out.loss) * k
-            n += k
-            if i % 4 == 0:
-                print(f"  {os.path.basename(path)}: {i + 1}/{len(enc)} лос {tot / n:.4f} ({(time.time() - t0) / 60:.1f} хв)", flush=True)
-    del m
-    return tot / n
+def main():
+    tok = AutoTokenizer.from_pretrained(orig)
+    texts = docs()[:N]
+    enc = [tok(t, return_tensors="pt", truncation=True, max_length=MAXT).input_ids for t in texts]
+    print(f"{len(enc)} документів, разом {sum(e.shape[1] for e in enc)} токенів")
 
 
-lo = mean_loss(orig)
-lg = mean_loss(grown)
-print(f"\nоригінал {lo:.4f} | вирощена {lg:.4f} | різниця {lg - lo:+.4f} (ppl {math.exp(lo):.2f} → {math.exp(lg):.2f})")
-json.dump({"orig": lo, "grown": lg, "docs": len(enc)}, open(os.path.join(grown, "grow_check.json"), "w"))
+    def mean_loss(path):
+        t0 = time.time()
+        m = AutoModelForCausalLM.from_pretrained(path, dtype=torch.bfloat16, device_map="cpu")
+        m.eval()
+        tot, n = 0.0, 0
+        with torch.no_grad():
+            for i, ids in enumerate(enc):
+                out = m(ids, labels=ids)
+                k = ids.shape[1] - 1
+                tot += float(out.loss) * k
+                n += k
+                if i % 4 == 0:
+                    print(f"  {os.path.basename(path)}: {i + 1}/{len(enc)} лос {tot / n:.4f} ({(time.time() - t0) / 60:.1f} хв)", flush=True)
+        del m
+        return tot / n
+
+
+    lo = mean_loss(orig)
+    lg = mean_loss(grown)
+    print(f"\nоригінал {lo:.4f} | вирощена {lg:.4f} | різниця {lg - lo:+.4f} (ppl {math.exp(lo):.2f} → {math.exp(lg):.2f})")
+    json.dump({"orig": lo, "grown": lg, "docs": len(enc)}, open(os.path.join(grown, "grow_check.json"), "w"))
+
+
+if __name__ == "__main__":
+    main()
